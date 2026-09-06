@@ -7,6 +7,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Transaction {
@@ -30,11 +31,12 @@ model Subscription {
   merchantName       String
   category           String?
   amount             Float
-  frequency          String   // "weekly" | "fortnightly" | "monthly" | "quarterly" | "yearly" | "irregular"
-  confidence         Float    // 0-1, how sure the detector is this is a real recurring subscription
+  userAmount         Float?
+  frequency          String
+  confidence         Float
   nextEstimatedDate  DateTime?
   active             Boolean  @default(true)
-  dismissed          Boolean  @default(false) // user marked as "not a subscription"
+  dismissed          Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

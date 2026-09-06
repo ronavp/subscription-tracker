@@ -13,16 +13,31 @@ const CATEGORIES = [
   "Cloud Storage",
   "Utilities",
   "Insurance",
+  "Membership",
   "Other",
 ];
 
-// Step 2: clean up messy raw descriptions ("SP * SPOTIFY AB STOCKHOLM") into a
-// normalized merchant name ("Spotify") + category, in batches to keep prompts small.
 async function cleanBatch(descriptions: string[]) {
   const prompt = `Here is a list of raw bank transaction descriptions. For each one, identify the actual
-merchant/company name in a clean, normalized form (e.g. "SP * SPOTIFY AB STOCKHOLM" -> "Spotify",
-"NETFLIX.COM 866-6374" -> "Netflix", "WOOLWORTHS 1234 SYDNEY" -> "Woolworths"), and assign the best-fitting
-category from this list: ${JSON.stringify(CATEGORIES)}.
+merchant/company name in a clean, normalized form, and assign the best-fitting category from this list:
+${JSON.stringify(CATEGORIES)}.
+
+General normalization examples:
+"SP * SPOTIFY AB STOCKHOLM" -> "Spotify"
+"NETFLIX.COM 866-6374" -> "Netflix"
+"WOOLWORTHS 1234 SYDNEY" -> "Woolworths"
+
+IMPORTANT — keep membership/subscription add-ons SEPARATE from the base pay-per-use service they
+belong to, even though they share a parent brand. Do not collapse these into the generic brand name:
+"UBER ONE MEMBERSHIP" or "UBER * ONE" -> "Uber One" (category: Membership) — NOT "Uber"
+"UBER TRIP" or "UBER *TRIP HELP.UBER.COM" -> "Uber" (category: Other) — this is a regular ride, not a subscription
+"UBER EATS" (an actual food order) -> "Uber Eats" (category: Food Delivery)
+"AMAZON PRIME" -> "Amazon Prime" (category: Membership) — NOT "Amazon"
+"DOORDASH DASHPASS" -> "DashPass" (category: Membership) — NOT "DoorDash"
+The distinction matters: a membership fee is a fixed recurring charge (same amount every time),
+while regular per-use charges from the same company vary in amount. Use the description text to tell
+them apart — look for words like "MEMBERSHIP", "ONE", "PRIME", "PASS", "PLUS" that indicate a
+subscription tier rather than a one-off transaction.
 
 Descriptions (respond in the same order):
 ${descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")}
@@ -49,7 +64,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: "Nothing to analyze", updated: 0 });
     }
 
-    // Batch in chunks of 25 to keep prompts manageable and avoid token limits
     const BATCH_SIZE = 25;
     let updated = 0;
 
@@ -57,17 +71,17 @@ export async function POST(req: NextRequest) {
       const chunk = transactions.slice(i, i + BATCH_SIZE);
       const cleaned = await cleanBatch(chunk.map((t: (typeof chunk)[number]) => t.rawDescription));
 
-      await Promise.all(
-        chunk.map((t: { id: string; rawDescription: string }, idx: number) =>
-          prisma.transaction.update({
-            where: { id: t.id },
-            data: {
-              cleanMerchant: cleaned[idx]?.merchant ?? t.rawDescription,
-              category: cleaned[idx]?.category ?? "Other",
-            },
-          })
-        )
-      );
+      for (let idx = 0; idx < chunk.length; idx++) {
+        const t = chunk[idx];
+        await prisma.transaction.update({
+          where: { id: t.id },
+          data: {
+            cleanMerchant: cleaned[idx]?.merchant ?? t.rawDescription,
+            category: cleaned[idx]?.category ?? "Other",
+          },
+        });
+      }
+
       updated += chunk.length;
     }
 

@@ -1,0 +1,11 @@
+{
+  "remoteName": "origin",
+  "projects": [
+    {
+      "id": "prj_AFnsGtmAKMtk7IRm2Dgcf8StH5hQ",
+      "name": "subscription-tracker",
+      "directory": ".",
+      "orgId": "team_JRu5Vlbeay2jgdvl2OJBse9q"
+    }
+  ]
+}

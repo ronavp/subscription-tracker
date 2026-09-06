@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { askClaude, MODELS } from "@/lib/anthropic";
-import { parseCsv, normalizeRows, ColumnMapping } from "@/lib/csv";
+import { parseCsv, normalizeRows, ColumnMapping, parseDateWithFormat } from "@/lib/csv";
 
-// Step 1 of the "AI-ified" pipeline: infer which CSV columns are date/description/amount.
-// Every bank exports differently, so instead of hardcoding parsers per bank we show
-// Claude a few sample rows and ask it to map the columns.
 async function inferColumnMapping(headers: string[], sampleRows: Record<string, string>[]): Promise<ColumnMapping> {
   const prompt = `You are looking at a bank statement CSV export. Here are the column headers and a few sample rows.
 
@@ -19,13 +16,19 @@ and which contains the amount. Some banks use a single signed "amount" column; o
 separate "debit"/"withdrawal" and "credit"/"deposit" columns — if so, return debitColumn and creditColumn
 instead of amountColumn.
 
+Also identify the exact date format used, as a pattern using DD, MM, YYYY, and the separator character
+exactly as it appears (e.g. "DD/MM/YYYY", "MM-DD-YYYY", "YYYY-MM-DD"). Look carefully — Australian and UK
+banks typically use day-first (DD/MM/YYYY), US banks typically use month-first (MM/DD/YYYY). If any sample
+date has a first number greater than 12, that confirms day-first.
+
 Respond with ONLY a JSON object, no other text, in this exact shape:
 {
   "dateColumn": "...",
   "descriptionColumn": "...",
-  "amountColumn": "..." ,
+  "amountColumn": "...",
   "debitColumn": null,
-  "creditColumn": null
+  "creditColumn": null,
+  "dateFormat": "DD/MM/YYYY"
 }`;
 
   const mapping = await askClaude(prompt, { model: MODELS.fast, jsonMode: true, maxTokens: 300 });
@@ -57,11 +60,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const withParsedDates = normalized
+      .map((r) => ({ ...r, parsedDate: parseDateWithFormat(r.date, mapping.dateFormat) }))
+      .filter((r) => r.parsedDate !== null);
+
+    if (withParsedDates.length === 0) {
+      return NextResponse.json(
+        { error: "Couldn't parse any dates in this file", mapping },
+        { status: 422 }
+      );
+    }
+
     const uploadBatchId = crypto.randomUUID();
 
     await prisma.transaction.createMany({
-      data: normalized.map((r) => ({
-        date: new Date(r.date),
+      data: withParsedDates.map((r) => ({
+        date: r.parsedDate as Date,
         rawDescription: r.description,
         amount: r.amount,
         uploadBatchId,
@@ -71,7 +85,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       uploadBatchId,
       mapping,
-      transactionsImported: normalized.length,
+      transactionsImported: withParsedDates.length,
     });
   } catch (err: any) {
     console.error(err);
