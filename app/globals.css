@@ -1,3 +1,16 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  /* Stops the iOS/PWA rubber-band bounce when scrolling past the top or bottom —
+     this is what makes a home-screen app feel like a real app instead of a webpage. */
+  overscroll-behavior-y: none;
+}
+
+body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
