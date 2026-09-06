@@ -275,8 +275,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const category = transactions.find((t) => t.effectiveMerchant === group.merchant)?.category;
-
+      const category = transactions.find((t) => t.effectiveMerchant === group.merchant)?.category ?? undefined;
       const judgment = await aiJudgeGroup(group, category);
 
       if (!judgment.is_subscription) {
