@@ -1,0 +1,53 @@
+// Prisma schema — Postgres (works with Vercel Postgres, Supabase, Neon, etc.)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Transaction {
+  id              String   @id @default(cuid())
+  date            DateTime
+  rawDescription  String
+  cleanMerchant   String?  // filled in by AI cleanup step
+  category        String?  // filled in by AI cleanup step
+  amount          Float
+  uploadBatchId   String
+  createdAt       DateTime @default(now())
+
+  subscriptionLinks SubscriptionTransaction[]
+
+  @@index([cleanMerchant])
+  @@index([uploadBatchId])
+}
+
+model Subscription {
+  id                 String   @id @default(cuid())
+  merchantName       String
+  category           String?
+  amount             Float
+  frequency          String   // "weekly" | "fortnightly" | "monthly" | "quarterly" | "yearly" | "irregular"
+  confidence         Float    // 0-1, how sure the detector is this is a real recurring subscription
+  nextEstimatedDate  DateTime?
+  active             Boolean  @default(true)
+  dismissed          Boolean  @default(false) // user marked as "not a subscription"
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  transactions SubscriptionTransaction[]
+}
+
+// Join table linking transactions to the subscription they were matched into
+model SubscriptionTransaction {
+  id             String       @id @default(cuid())
+  subscriptionId String
+  transactionId  String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  transaction    Transaction  @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriptionId, transactionId])
+}

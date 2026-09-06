@@ -1,0 +1,80 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/db";
+import { askClaude, MODELS } from "@/lib/anthropic";
+import { parseCsv, normalizeRows, ColumnMapping } from "@/lib/csv";
+
+// Step 1 of the "AI-ified" pipeline: infer which CSV columns are date/description/amount.
+// Every bank exports differently, so instead of hardcoding parsers per bank we show
+// Claude a few sample rows and ask it to map the columns.
+async function inferColumnMapping(headers: string[], sampleRows: Record<string, string>[]): Promise<ColumnMapping> {
+  const prompt = `You are looking at a bank statement CSV export. Here are the column headers and a few sample rows.
+
+Headers: ${JSON.stringify(headers)}
+
+Sample rows:
+${JSON.stringify(sampleRows.slice(0, 5), null, 2)}
+
+Identify which column contains the transaction date, which contains the description/merchant text,
+and which contains the amount. Some banks use a single signed "amount" column; others split into
+separate "debit"/"withdrawal" and "credit"/"deposit" columns — if so, return debitColumn and creditColumn
+instead of amountColumn.
+
+Respond with ONLY a JSON object, no other text, in this exact shape:
+{
+  "dateColumn": "...",
+  "descriptionColumn": "...",
+  "amountColumn": "..." ,
+  "debitColumn": null,
+  "creditColumn": null
+}`;
+
+  const mapping = await askClaude(prompt, { model: MODELS.fast, jsonMode: true, maxTokens: 300 });
+  return mapping as ColumnMapping;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData();
+    const file = formData.get("file") as File | null;
+    if (!file) {
+      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    }
+
+    const text = await file.text();
+    const { headers, rows } = parseCsv(text);
+
+    if (rows.length === 0) {
+      return NextResponse.json({ error: "CSV appears to be empty" }, { status: 400 });
+    }
+
+    const mapping = await inferColumnMapping(headers, rows);
+    const normalized = normalizeRows(rows, mapping);
+
+    if (normalized.length === 0) {
+      return NextResponse.json(
+        { error: "Couldn't extract transactions — check the CSV format", mapping },
+        { status: 422 }
+      );
+    }
+
+    const uploadBatchId = crypto.randomUUID();
+
+    await prisma.transaction.createMany({
+      data: normalized.map((r) => ({
+        date: new Date(r.date),
+        rawDescription: r.description,
+        amount: r.amount,
+        uploadBatchId,
+      })),
+    });
+
+    return NextResponse.json({
+      uploadBatchId,
+      mapping,
+      transactionsImported: normalized.length,
+    });
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
+  }
+}
